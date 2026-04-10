@@ -689,7 +689,12 @@ async function apiCall(method, path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return res.json();
+  const rawText = await res.text();
+  try {
+    return JSON.parse(rawText);
+  } catch(e) {
+    throw new Error(`Proxy returned non-JSON (status ${res.status}): ${rawText.substring(0, 300)}`);
+  }
 }
 
 // ---- UI helpers ----
