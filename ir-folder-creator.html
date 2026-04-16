@@ -262,10 +262,15 @@ function disconnect() {
 
 async function fetchUserInfo() {
   try {
-    const res = await dbxFetch('https://api.dropboxapi.com/2/users/get_current_account', {}, 'POST');
-    if (res.name) {
+    const res = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + accessToken }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.name) {
       document.getElementById('authLabel').innerHTML =
-        `<span class="auth-user">Connected as ${res.name.display_name}</span>`;
+        `<span class="auth-user">Connected as ${data.name.display_name}</span>`;
     }
   } catch(e) { /* non-critical */ }
 }
