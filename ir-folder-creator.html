@@ -378,10 +378,10 @@ async function loadFolderBrowser(path) {
 
     document.getElementById('folderList').innerHTML = folders.map(f => `
       <div class="folder-item ${selectedPath === f.path_display ? 'selected' : ''}"
-           data-path="${esc(f.path_lower)}"
+           data-path="${esc(f.path_display)}"
            data-display="${esc(f.path_display)}"
            onclick="selectFolder(this)"
-           ondblclick="loadFolderBrowser('${esc(f.path_lower)}')">
+           ondblclick="loadFolderBrowser('${esc(f.path_display)}')">
         <span class="folder-icon">📁</span>
         <span class="folder-name">${esc(f.name)}</span>
         <span class="folder-arrow">▶</span>
