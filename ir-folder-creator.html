@@ -33,16 +33,12 @@
   .btn-danger{background:rgba(232,74,74,0.15);color:var(--red);border:1px solid rgba(232,74,74,0.3);}
   .btn-danger:hover{background:rgba(232,74,74,0.25);}
   .btn-row{display:flex;gap:10px;flex-wrap:wrap;}
-
-  /* Auth panel */
   .auth-status{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);font-family:var(--mono);font-size:13px;}
   .auth-status.connected{border-color:rgba(74,232,122,0.4);background:rgba(74,232,122,0.06);}
   .auth-dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);flex-shrink:0;}
   .auth-dot.connected{background:var(--green);}
   .auth-label{flex:1;}
   .auth-user{color:var(--green);}
-
-  /* Drop zone */
   .drop-zone{border:2px dashed var(--border);border-radius:8px;padding:40px 24px;text-align:center;cursor:pointer;transition:all 0.2s;position:relative;background:var(--surface);margin-bottom:20px;}
   .drop-zone:hover,.drop-zone.drag-over{border-color:var(--accent);background:rgba(232,197,71,0.04);}
   .drop-zone.has-file{border-color:rgba(74,232,122,0.4);background:rgba(74,232,122,0.04);}
@@ -50,8 +46,6 @@
   .drop-icon{font-size:36px;margin-bottom:12px;display:block;}
   .drop-zone h3{font-size:15px;font-weight:500;margin-bottom:6px;}
   .drop-zone p{font-size:13px;color:var(--text-dim);}
-
-  /* Folder browser */
   .folder-browser{background:var(--surface2);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:12px;}
   .folder-browser-header{padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:8px;}
   .breadcrumb{display:flex;align-items:center;gap:4px;flex:1;flex-wrap:wrap;}
@@ -63,20 +57,16 @@
   .folder-item:last-child{border-bottom:none;}
   .folder-item:hover{background:rgba(232,197,71,0.06);}
   .folder-item.selected{background:rgba(232,197,71,0.12);color:var(--accent);}
-  .folder-icon{flex-shrink:0;font-size:14px;}
+  .folder-icon{flex-shrink:0;}
   .folder-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .folder-arrow{color:#555;font-size:10px;}
   .folder-loading{padding:20px;text-align:center;color:var(--text-dim);font-family:var(--mono);font-size:12px;}
   .selected-path{margin-top:10px;padding:10px 14px;background:rgba(232,197,71,0.08);border:1px solid rgba(232,197,71,0.25);border-radius:5px;font-family:var(--mono);font-size:12px;color:var(--accent);}
-
-  /* IR preview */
   .ir-preview{background:var(--surface2);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:12px;display:none;}
   .ir-preview.visible{display:block;}
   .ir-preview-header{padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;}
   .ir-chips{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px;max-height:140px;overflow-y:auto;}
   .ir-chip{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-family:var(--mono);font-size:11px;color:var(--text-dim);}
-
-  /* Log panel */
   .log-panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;display:none;margin-bottom:20px;}
   .log-panel.visible{display:block;}
   .log-header{padding:10px 14px;background:var(--surface2);font-family:var(--mono);font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;}
@@ -87,8 +77,6 @@
   .log-success{color:var(--green);}
   .log-error{color:var(--red);}
   .log-warn{color:var(--orange);}
-
-  /* Summary */
   .summary-bar{display:none;gap:16px;margin-bottom:20px;}
   .summary-bar.visible{display:flex;}
   .stat-box{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:14px 16px;}
@@ -97,19 +85,15 @@
   .stat-box.green .stat-val{color:var(--green);}
   .stat-box.orange .stat-val{color:var(--orange);}
   .stat-box.red .stat-val{color:var(--red);}
-
   @keyframes spin{to{transform:rotate(360deg);}}
   .spinner{width:14px;height:14px;border:2px solid rgba(0,0,0,0.3);border-top-color:#000;border-radius:50%;animation:spin 0.6s linear infinite;display:inline-block;}
-  .spinner-light{border-color:rgba(255,255,255,0.2);border-top-color:var(--text-dim);}
   .hidden{display:none;}
-  .field-row{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
-  .field-row label{font-size:12px;color:var(--text-dim);font-family:var(--mono);}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-icon">📁</div>
+  <div class="header-icon">&#x1F4C1;</div>
   <div class="header-text">
     <h1>IR Folder Creator</h1>
     <p>Upload an Inertia IR export, pick a destination in Dropbox, and create all folders in one click.</p>
@@ -120,9 +104,8 @@
   <strong>How to use:</strong> Connect to Dropbox, upload your IR export file (.xls, .xlsx, or .csv), browse to your destination folder, then click <strong>Create Folders</strong>. Existing folders are skipped automatically.
 </div>
 
-<!-- Step 1: Auth -->
 <div class="panel">
-  <h2>① Dropbox Connection</h2>
+  <h2>Step 1 &mdash; Dropbox Connection</h2>
   <div class="auth-status" id="authStatus">
     <div class="auth-dot" id="authDot"></div>
     <span class="auth-label" id="authLabel">Not connected</span>
@@ -133,12 +116,11 @@
   </div>
 </div>
 
-<!-- Step 2: File upload -->
 <div class="panel">
-  <h2>② Upload IR Export File</h2>
+  <h2>Step 2 &mdash; Upload IR Export File</h2>
   <div class="drop-zone" id="dropZone">
     <input type="file" id="fileInput" accept=".xls,.xlsx,.csv" onchange="handleFile(event)">
-    <span class="drop-icon">📄</span>
+    <span class="drop-icon">&#x1F4C4;</span>
     <h3 id="dropTitle">Drop file here or click to browse</h3>
     <p id="dropSub">.xls, .xlsx, or .csv exported from Inertia</p>
   </div>
@@ -148,38 +130,33 @@
   </div>
 </div>
 
-<!-- Step 3: Destination -->
 <div class="panel">
-  <h2>③ Select Destination Folder</h2>
+  <h2>Step 3 &mdash; Select Destination Folder</h2>
   <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">Browse your Dropbox and click a folder to select it. Double-click to open it.</p>
   <button class="btn btn-secondary" id="browseBtn" onclick="loadFolderBrowser('')" disabled>Browse Dropbox</button>
   <div id="folderBrowserWrap" class="hidden">
     <div class="folder-browser">
       <div class="folder-browser-header">
-        <span>📂</span>
         <div class="breadcrumb" id="breadcrumb"></div>
       </div>
       <div class="folder-list" id="folderList">
-        <div class="folder-loading">Loading…</div>
+        <div class="folder-loading">Loading...</div>
       </div>
     </div>
     <div class="selected-path hidden" id="selectedPathDisplay"></div>
   </div>
 </div>
 
-<!-- Step 4: Create -->
 <div class="btn-row" style="margin-bottom:20px;">
   <button class="btn btn-primary" id="createBtn" onclick="createFolders()" disabled>Create Folders</button>
 </div>
 
-<!-- Summary -->
 <div class="summary-bar" id="summaryBar">
   <div class="stat-box green"><div class="stat-val" id="statCreated">0</div><div class="stat-label">Created</div></div>
   <div class="stat-box orange"><div class="stat-val" id="statSkipped">0</div><div class="stat-label">Already existed</div></div>
   <div class="stat-box red"><div class="stat-val" id="statErrors">0</div><div class="stat-label">Errors</div></div>
 </div>
 
-<!-- Log -->
 <div class="log-panel" id="logPanel">
   <div class="log-header">
     <span>Activity Log</span>
@@ -189,40 +166,81 @@
 </div>
 
 <script>
-// ── Config ─────────────────────────────────────────────────────────────────
-const CLIENT_ID = 'sfl5f2iv14cur37';
-const REDIRECT_URI = location.href.split('?')[0].split('#')[0];
+// Config
+var CLIENT_ID    = 'sfl5f2iv14cur37';
+var REDIRECT_URI = location.href.split('?')[0].split('#')[0];
+var PROXY        = 'https://smartsheet-proxy.rebecca-91f.workers.dev';
 
-// ── State ──────────────────────────────────────────────────────────────────
-let accessToken = null;
-let irNumbers = [];
-let selectedPath = null;   // Dropbox path string, e.g. '/UCSF NHPH/IRs/July'
-let selectedPathDisplay = null;
-let currentBrowsePath = '';
-let stats = { created: 0, skipped: 0, errors: 0 };
+// State
+var accessToken         = null;
+var irNumbers           = [];
+var selectedPath        = null;
+var selectedPathDisplay = null;
+var stats               = { created: 0, skipped: 0, errors: 0 };
 
-// ── Auth ───────────────────────────────────────────────────────────────────
-function startAuth() {
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
-    response_type: 'token',
-    redirect_uri: REDIRECT_URI,
-    scope: 'files.metadata.read files.content.write'
-  });
-  location.href = 'https://www.dropbox.com/oauth2/authorize?' + params;
+// PKCE helpers
+function base64url(buffer) {
+  return btoa(String.fromCharCode.apply(null, new Uint8Array(buffer)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-function handleOAuthCallback() {
-  const hash = location.hash.slice(1);
-  if (!hash) return;
-  const params = new URLSearchParams(hash);
-  const token = params.get('access_token');
-  if (!token) return;
-  console.log('Token captured:', token.substring(0, 20) + '...');
-  // Clean URL
+async function generatePKCE() {
+  var verifier  = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  var digest    = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  var challenge = base64url(digest);
+  return { verifier: verifier, challenge: challenge };
+}
+
+// Auth
+async function startAuth() {
+  var pkce = await generatePKCE();
+  sessionStorage.setItem('pkce_verifier', pkce.verifier);
+  var params = new URLSearchParams({
+    client_id:             CLIENT_ID,
+    response_type:         'code',
+    redirect_uri:          REDIRECT_URI,
+    code_challenge:        pkce.challenge,
+    code_challenge_method: 'S256',
+    token_access_type:     'online'
+  });
+  location.href = 'https://www.dropbox.com/oauth2/authorize?' + params.toString();
+}
+
+async function handleOAuthCallback() {
+  var params   = new URLSearchParams(location.search);
+  var code     = params.get('code');
+  if (!code) return;
+
+  var verifier = sessionStorage.getItem('pkce_verifier');
+  if (!verifier) {
+    showAuthError('Session expired -- please try connecting again.');
+    return;
+  }
+  sessionStorage.removeItem('pkce_verifier');
   history.replaceState(null, '', location.pathname);
-  setToken(token);
-  fetchUserInfo();
+
+  try {
+    var res = await fetch('https://api.dropbox.com/oauth2/token', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    new URLSearchParams({
+        code:          code,
+        grant_type:    'authorization_code',
+        client_id:     CLIENT_ID,
+        redirect_uri:  REDIRECT_URI,
+        code_verifier: verifier
+      }).toString()
+    });
+    var data = await res.json();
+    if (!res.ok || !data.access_token) {
+      showAuthError('Could not get access token: ' + (data.error_description || data.error || 'unknown error'));
+      return;
+    }
+    setToken(data.access_token);
+    fetchUserInfo();
+  } catch(err) {
+    showAuthError('Connection failed: ' + err.message);
+  }
 }
 
 function setToken(token) {
@@ -236,10 +254,14 @@ function setToken(token) {
   checkCreateReady();
 }
 
+function showAuthError(msg) {
+  document.getElementById('authLabel').innerHTML = '<span style="color:var(--red)">' + esc(msg) + '</span>';
+}
+
 function disconnect() {
-  accessToken = null;
-  selectedPath = null;
-  irNumbers = [];
+  accessToken         = null;
+  selectedPath        = null;
+  irNumbers           = [];
   document.getElementById('authDot').classList.remove('connected');
   document.getElementById('authStatus').classList.remove('connected');
   document.getElementById('authLabel').textContent = 'Not connected';
@@ -254,71 +276,68 @@ function disconnect() {
 
 async function fetchUserInfo() {
   try {
-    const res = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
-      method: 'POST',
+    var res = await fetch(PROXY + '/dropbox/users/get_current_account', {
+      method:  'POST',
       headers: { 'Authorization': 'Bearer ' + accessToken }
     });
     if (!res.ok) return;
-    const data = await res.json();
+    var data = await res.json();
     if (data.name) {
       document.getElementById('authLabel').innerHTML =
-        `<span class="auth-user">Connected as ${data.name.display_name}</span>`;
+        '<span class="auth-user">Connected as ' + esc(data.name.display_name) + '</span>';
     }
-  } catch(e) { /* non-critical */ }
+  } catch(e) {}
 }
 
-// ── Dropbox API helper ─────────────────────────────────────────────────────
-async function dbxFetch(url, body, method='POST') {
-  const opts = {
-    method,
+// Dropbox API via Worker proxy
+async function dbxFetch(path, body) {
+  var res = await fetch(PROXY + '/dropbox' + path, {
+    method:  'POST',
     headers: {
       'Authorization': 'Bearer ' + accessToken,
-      'Content-Type': 'application/json'
-    }
-  };
-  if (method !== 'GET') opts.body = JSON.stringify(body);
-  const res = await fetch(url, opts);
+      'Content-Type':  'application/json'
+    },
+    body: JSON.stringify(body)
+  });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
+    var err = await res.json().catch(function() { return {}; });
     throw new Error(err.error_summary || err.message || res.statusText);
   }
   return res.json();
 }
 
-// ── File parsing ───────────────────────────────────────────────────────────
+// File parsing
 async function handleFile(event) {
-  const file = event.target.files[0];
+  var file = event.target.files[0];
   if (!file) return;
 
-  const dropZone = document.getElementById('dropZone');
+  var dropZone = document.getElementById('dropZone');
   dropZone.classList.add('has-file');
   document.getElementById('dropTitle').textContent = file.name;
-  document.getElementById('dropSub').textContent = 'Processing…';
+  document.getElementById('dropSub').textContent   = 'Processing...';
   irNumbers = [];
 
   try {
-    const data = await file.arrayBuffer();
-    const workbook = XLSX.read(data);
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+    var data       = await file.arrayBuffer();
+    var workbook   = XLSX.read(data);
+    var firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    var jsonData   = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
 
-    // Find IR column — same logic as existing tool
-    let irCol = -1;
-    const headers = jsonData[0] || [];
-    for (let i = 0; i < headers.length; i++) {
-      const h = String(headers[i]).toLowerCase();
+    var irCol   = -1;
+    var headers = jsonData[0] || [];
+    for (var i = 0; i < headers.length; i++) {
+      var h = String(headers[i]).toLowerCase();
       if (h.includes('ir') || h.includes('code') || h.includes('inspection')) {
         irCol = i; break;
       }
     }
     if (irCol === -1) irCol = 0;
 
-    const numbers = [];
-    for (let i = 1; i < jsonData.length; i++) {
-      const row = jsonData[i];
+    var numbers = [];
+    for (var r = 1; r < jsonData.length; r++) {
+      var row = jsonData[r];
       if (row && row[irCol]) {
-        let val = String(row[irCol]).trim();
-        // Strip IR- prefix — same as existing tool
+        var val = String(row[irCol]).trim();
         if (val.toUpperCase().startsWith('IR-')) val = val.substring(3);
         else if (val.toUpperCase().startsWith('IR')) val = val.substring(2);
         if (val) numbers.push(val);
@@ -326,14 +345,18 @@ async function handleFile(event) {
     }
 
     if (numbers.length === 0) {
-      document.getElementById('dropSub').textContent = 'No IR numbers found — check file format';
+      document.getElementById('dropSub').textContent = 'No IR numbers found -- check file format';
       dropZone.classList.remove('has-file');
       return;
     }
 
     irNumbers = numbers;
-    document.getElementById('dropSub').textContent = `${numbers.length} IR numbers found`;
-    showIRPreview(numbers);
+    document.getElementById('dropSub').textContent = numbers.length + ' IR numbers found';
+    document.getElementById('irPreviewHeader').textContent = numbers.length + ' folders will be created';
+    document.getElementById('irChips').innerHTML = numbers.map(function(n) {
+      return '<span class="ir-chip">' + esc(n) + '</span>';
+    }).join('');
+    document.getElementById('irPreview').classList.add('visible');
     checkCreateReady();
 
   } catch(err) {
@@ -342,182 +365,151 @@ async function handleFile(event) {
   }
 }
 
-function showIRPreview(numbers) {
-  const preview = document.getElementById('irPreview');
-  document.getElementById('irPreviewHeader').textContent = `${numbers.length} folders will be created`;
-  document.getElementById('irChips').innerHTML = numbers.map(n =>
-    `<span class="ir-chip">${n}</span>`).join('');
-  preview.classList.add('visible');
-}
-
-// ── Folder Browser ─────────────────────────────────────────────────────────
+// Folder browser
 async function loadFolderBrowser(path) {
-  currentBrowsePath = path;
   document.getElementById('folderBrowserWrap').classList.remove('hidden');
-  document.getElementById('folderList').innerHTML = '<div class="folder-loading">Loading…</div>';
+  document.getElementById('folderList').innerHTML = '<div class="folder-loading">Loading...</div>';
   updateBreadcrumb(path);
 
   try {
-    const body = path === ''
-      ? { path: '', recursive: false }
-      : { path, recursive: false };
-
-    const res = await dbxFetch('https://api.dropboxapi.com/2/files/list_folder', body);
-    const folders = res.entries
-      .filter(e => e['.tag'] === 'folder')
-      .sort((a, b) => a.name.localeCompare(b.name));
+    var res     = await dbxFetch('/files/list_folder', { path: path || '', recursive: false });
+    var folders = res.entries
+      .filter(function(e) { return e['.tag'] === 'folder'; })
+      .sort(function(a, b) { return a.name.localeCompare(b.name); });
 
     if (folders.length === 0) {
-      document.getElementById('folderList').innerHTML =
-        '<div class="folder-loading">No subfolders here</div>';
+      document.getElementById('folderList').innerHTML = '<div class="folder-loading">No subfolders here</div>';
       return;
     }
 
-    document.getElementById('folderList').innerHTML = folders.map(f => `
-      <div class="folder-item ${selectedPath === f.path_display ? 'selected' : ''}"
-           data-path="${esc(f.path_display)}"
-           data-display="${esc(f.path_display)}"
-           onclick="selectFolder(this)"
-           ondblclick="loadFolderBrowser('${esc(f.path_display)}')">
-        <span class="folder-icon">📁</span>
-        <span class="folder-name">${esc(f.name)}</span>
-        <span class="folder-arrow">▶</span>
-      </div>`).join('');
+    document.getElementById('folderList').innerHTML = folders.map(function(f) {
+      var sel = selectedPath === f.path_display ? ' selected' : '';
+      return '<div class="folder-item' + sel + '" '
+        + 'data-path="' + esc(f.path_display) + '" '
+        + 'data-display="' + esc(f.path_display) + '" '
+        + 'onclick="selectFolder(this)" '
+        + 'ondblclick="loadFolderBrowser(this.dataset.path)">'
+        + '<span class="folder-icon">&#x1F4C1;</span>'
+        + '<span class="folder-name">' + esc(f.name) + '</span>'
+        + '<span class="folder-arrow">&#x25B6;</span>'
+        + '</div>';
+    }).join('');
 
   } catch(err) {
     document.getElementById('folderList').innerHTML =
-      `<div class="folder-loading" style="color:var(--red)">Error: ${esc(err.message)}</div>`;
+      '<div class="folder-loading" style="color:var(--red)">Error: ' + esc(err.message) + '</div>';
   }
 }
 
 function selectFolder(el) {
-  // Deselect all
-  document.querySelectorAll('.folder-item').forEach(i => i.classList.remove('selected'));
+  document.querySelectorAll('.folder-item').forEach(function(i) { i.classList.remove('selected'); });
   el.classList.add('selected');
-
-  selectedPath = el.dataset.path;
+  selectedPath        = el.dataset.path;
   selectedPathDisplay = el.dataset.display;
-
-  const disp = document.getElementById('selectedPathDisplay');
-  disp.textContent = '✓ ' + selectedPathDisplay;
+  var disp = document.getElementById('selectedPathDisplay');
+  disp.textContent = 'Selected: ' + selectedPathDisplay;
   disp.classList.remove('hidden');
   checkCreateReady();
 }
 
 function updateBreadcrumb(path) {
-  const bc = document.getElementById('breadcrumb');
+  var bc = document.getElementById('breadcrumb');
   if (!path) {
     bc.innerHTML = '<span class="breadcrumb-item" onclick="loadFolderBrowser(\'\')">Dropbox</span>';
     return;
   }
-  const parts = path.split('/').filter(Boolean);
-  let html = '<span class="breadcrumb-item" onclick="loadFolderBrowser(\'\')">Dropbox</span>';
-  let built = '';
-  parts.forEach((p, i) => {
+  var parts = path.split('/').filter(function(p) { return p; });
+  var html  = '<span class="breadcrumb-item" onclick="loadFolderBrowser(\'\')">Dropbox</span>';
+  var built = '';
+  parts.forEach(function(p, i) {
     built += '/' + p;
-    const pathSnap = built;
-    html += '<span class="breadcrumb-sep">/</span>';
+    var snap = built;
+    html += '<span class="breadcrumb-sep"> / </span>';
     if (i === parts.length - 1) {
-      html += `<span style="color:var(--text-dim);font-family:var(--mono);font-size:11px;">${esc(p)}</span>`;
+      html += '<span style="color:var(--text-dim);font-family:var(--mono);font-size:11px;">' + esc(p) + '</span>';
     } else {
-      html += `<span class="breadcrumb-item" onclick="loadFolderBrowser('${esc(pathSnap)}')">${esc(p)}</span>`;
+      html += '<span class="breadcrumb-item" onclick="loadFolderBrowser(\'' + esc(snap) + '\')">' + esc(p) + '</span>';
     }
   });
   bc.innerHTML = html;
 }
 
-// ── Create Folders ─────────────────────────────────────────────────────────
+// Create folders
 function checkCreateReady() {
-  const ready = accessToken && irNumbers.length > 0 && selectedPath;
-  document.getElementById('createBtn').disabled = !ready;
+  document.getElementById('createBtn').disabled = !(accessToken && irNumbers.length > 0 && selectedPath);
 }
 
 async function createFolders() {
-  const btn = document.getElementById('createBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Creating…';
+  var btn = document.getElementById('createBtn');
+  btn.disabled  = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
 
   stats = { created: 0, skipped: 0, errors: 0 };
   document.getElementById('summaryBar').classList.remove('visible');
-  document.getElementById('logPanel').classList.remove('visible');
   document.getElementById('logBody').innerHTML = '';
+  document.getElementById('logPanel').classList.add('visible');
 
-  showLog(true);
-  log(`Starting — ${irNumbers.length} folders → ${selectedPathDisplay}`, 'info');
+  log('Starting -- ' + irNumbers.length + ' folders -> ' + selectedPathDisplay, 'info');
 
-  for (const num of irNumbers) {
-    const folderPath = selectedPath + '/' + num;
+  for (var i = 0; i < irNumbers.length; i++) {
+    var num        = irNumbers[i];
+    var folderPath = selectedPath + '/' + num;
     try {
-      await dbxFetch('https://api.dropboxapi.com/2/files/create_folder_v2', {
-        path: folderPath,
-        autorename: false
-      });
+      await dbxFetch('/files/create_folder_v2', { path: folderPath, autorename: false });
       stats.created++;
-      log(`✓ Created: ${num}`, 'success');
+      log('Created: ' + num, 'success');
     } catch(err) {
-      // Dropbox returns path/conflict/folder when folder already exists
-      if (err.message && err.message.includes('path/conflict')) {
+      if (err.message && err.message.indexOf('path/conflict') !== -1) {
         stats.skipped++;
-        log(`— Skipped (already exists): ${num}`, 'warn');
+        log('Skipped (already exists): ' + num, 'warn');
       } else {
         stats.errors++;
-        log(`✗ Error on ${num}: ${err.message}`, 'error');
+        log('Error on ' + num + ': ' + err.message, 'error');
       }
     }
   }
 
-  updateSummary();
-  log(`Done — ${stats.created} created, ${stats.skipped} skipped, ${stats.errors} errors`,
-    stats.errors > 0 ? 'warn' : 'success');
+  document.getElementById('statCreated').textContent = stats.created;
+  document.getElementById('statSkipped').textContent = stats.skipped;
+  document.getElementById('statErrors').textContent  = stats.errors;
+  document.getElementById('summaryBar').classList.add('visible');
 
-  btn.disabled = false;
+  var summary = 'Done -- ' + stats.created + ' created, ' + stats.skipped + ' skipped, ' + stats.errors + ' errors';
+  log(summary, stats.errors > 0 ? 'warn' : 'success');
+
+  btn.disabled  = false;
   btn.innerHTML = 'Create Folders';
 }
 
-// ── Log ────────────────────────────────────────────────────────────────────
-function showLog(show) {
-  document.getElementById('logPanel').classList.toggle('visible', show);
+// Log
+function log(msg, type) {
+  var body = document.getElementById('logBody');
+  var ts   = new Date().toLocaleTimeString('en-US', { hour12: false });
+  var cls  = { info: 'log-info', success: 'log-success', error: 'log-error', warn: 'log-warn' }[type || 'info'] || 'log-info';
+  body.innerHTML += '<div class="log-line"><span class="log-time">[' + ts + ']</span><span class="' + cls + '">' + esc(msg) + '</span></div>';
+  body.scrollTop  = body.scrollHeight;
+  document.getElementById('logCount').textContent = body.querySelectorAll('.log-line').length + ' entries';
 }
 
-function log(msg, type = 'info') {
-  const body = document.getElementById('logBody');
-  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
-  const cls = { info: 'log-info', success: 'log-success', error: 'log-error', warn: 'log-warn' }[type] || 'log-info';
-  body.innerHTML += `<div class="log-line"><span class="log-time">[${ts}]</span><span class="${cls}">${esc(msg)}</span></div>`;
-  body.scrollTop = body.scrollHeight;
-  const total = body.querySelectorAll('.log-line').length;
-  document.getElementById('logCount').textContent = total + ' entries';
-}
-
-function updateSummary() {
-  document.getElementById('statCreated').textContent = stats.created;
-  document.getElementById('statSkipped').textContent = stats.skipped;
-  document.getElementById('statErrors').textContent = stats.errors;
-  document.getElementById('summaryBar').classList.add('visible');
-}
-
-// ── Util ───────────────────────────────────────────────────────────────────
+// Util
 function esc(str) {
   return String(str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// ── Drag and drop ──────────────────────────────────────────────────────────
-const dropZone = document.getElementById('dropZone');
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => {
+// Drag and drop
+var dropZone = document.getElementById('dropZone');
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('drag-over'); });
+dropZone.addEventListener('drop', function(e) {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) {
-    document.getElementById('fileInput').files = e.dataTransfer.files;
-    handleFile({ target: { files: [file] } });
-  }
+  var file = e.dataTransfer.files[0];
+  if (file) handleFile({ target: { files: [file] } });
 });
 
-// ── Init ───────────────────────────────────────────────────────────────────
+// Init
 handleOAuthCallback();
 </script>
 </body>
