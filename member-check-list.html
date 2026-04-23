@@ -1187,27 +1187,30 @@ function identifyHeaderRow(items, rowBoundaries, colsAsc) {
     if (rIdx >= 0) itemsByRow[rIdx].push(it);
   }
 
-  for (var j = 0; j < numRows; j++) {
-    var rowItems = itemsByRow[j];
-    if (rowItems.length === 0) continue;
+  // Collect field-label matches from a given set of rows' items.
+  // Returns array of { field, x } sorted by x ascending, deduped by field
+  // (leftmost occurrence wins).
+  function collectMatches(rows) {
     var matches = [];
-    for (var ri = 0; ri < rowItems.length; ri++) {
-      var it2 = rowItems[ri];
-      var s = it2.str;
-      var itX = it2.transform[4];
-      var itW = it2.width || estimateWidth(s);
-      var strLen = Math.max(1, s.length);
-      for (var fp = 0; fp < FIELD_PATTERNS.length; fp++) {
-        var pattern = FIELD_PATTERNS[fp];
-        var m = s.search(pattern.re);
-        if (m < 0) continue;
-        var mstr = s.match(pattern.re)[0];
-        var charCenter = m + mstr.length / 2;
-        var x = itX + itW * (charCenter / strLen);
-        matches.push({ field: pattern.field, x: x });
+    for (var r = 0; r < rows.length; r++) {
+      var ri_list = rows[r];
+      for (var i = 0; i < ri_list.length; i++) {
+        var it2 = ri_list[i];
+        var s = it2.str;
+        var itX = it2.transform[4];
+        var itW = it2.width || estimateWidth(s);
+        var strLen = Math.max(1, s.length);
+        for (var fp = 0; fp < FIELD_PATTERNS.length; fp++) {
+          var pattern = FIELD_PATTERNS[fp];
+          var m = s.search(pattern.re);
+          if (m < 0) continue;
+          var mstr = s.match(pattern.re)[0];
+          var charCenter = m + mstr.length / 2;
+          var x = itX + itW * (charCenter / strLen);
+          matches.push({ field: pattern.field, x: x });
+        }
       }
     }
-    if (matches.length < 3) continue;
     matches.sort(function(a, b) { return a.x - b.x; });
     var seen = {};
     var uniq = [];
@@ -1216,19 +1219,93 @@ function identifyHeaderRow(items, rowBoundaries, colsAsc) {
       seen[matches[mi].field] = true;
       uniq.push(matches[mi]);
     }
+    return uniq;
+  }
+
+  // Map a set of matches to columns using monotonic left-to-right assignment.
+  function mapToColumns(matches) {
     var colToField = new Array(numCols).fill(null);
     var minCol = 0;
-    for (var ui = 0; ui < uniq.length; ui++) {
-      var col = colForX(uniq[ui].x);
-      if (col < 0) col = uniq[ui].x < colsAsc[0] ? 0 : numCols - 1;
+    for (var ui = 0; ui < matches.length; ui++) {
+      var col = colForX(matches[ui].x);
+      if (col < 0) col = matches[ui].x < colsAsc[0] ? 0 : numCols - 1;
       if (col < minCol) col = minCol;
       while (col < numCols && colToField[col] !== null) col++;
       if (col >= numCols) break;
-      colToField[col] = uniq[ui].field;
+      colToField[col] = matches[ui].field;
       minCol = col + 1;
     }
-    var found = 0;
-    for (var fi = 0; fi < numCols; fi++) if (colToField[fi]) found++;
+    return colToField;
+  }
+
+  // Some IR templates wrap long column headers onto two lines, e.g.
+  // "Inspection" on the top row and "Type(s)" on the row below.
+  // PDF.js emits those as separate text items in separate row-bands, so
+  // neither item alone matches a pattern like /inspection\s*type/i.
+  // To handle this, we also try concatenating items that sit in the same
+  // column across adjacent row-bands before pattern-matching.
+  function stitchedItems(rowIdxA, rowIdxB) {
+    var a = itemsByRow[rowIdxA] || [];
+    var b = itemsByRow[rowIdxB] || [];
+    // For each text item in row A, look for a row-B item whose x-range
+    // overlaps (same column). Concatenate their strings into a virtual
+    // item that inherits row A's x-coords, so the combined label is
+    // tested against field patterns and placed using row A's position.
+    var stitched = [];
+    for (var i = 0; i < a.length; i++) {
+      var ia = a[i];
+      var iaX = ia.transform[4];
+      var iaW = ia.width || estimateWidth(ia.str);
+      var combinedStr = ia.str;
+      for (var j = 0; j < b.length; j++) {
+        var ib = b[j];
+        var ibX = ib.transform[4];
+        var ibW = ib.width || estimateWidth(ib.str);
+        var overlap = Math.min(iaX + iaW, ibX + ibW) - Math.max(iaX, ibX);
+        if (overlap > 2) {
+          combinedStr += ' ' + ib.str;
+        }
+      }
+      if (combinedStr !== ia.str) {
+        // Create a synthetic item preserving row A's position so the
+        // x-center math places the label in the correct column.
+        stitched.push({
+          str: combinedStr,
+          transform: ia.transform,
+          width: ia.width,
+        });
+      } else {
+        stitched.push(ia);
+      }
+    }
+    return stitched;
+  }
+
+  for (var j = 0; j < numRows; j++) {
+    var rowItems = itemsByRow[j];
+    if (rowItems.length === 0) continue;
+
+    // First pass: match against this row's items only.
+    var uniq = collectMatches([rowItems]);
+    if (uniq.length < 3) continue;
+    var colToField = mapToColumns(uniq);
+    var found = colToField.filter(Boolean).length;
+
+    // If we found ≥3 but fewer than the pattern list suggests, and
+    // there's a row below us, try stitching with row j+1 to recover
+    // any wrapped labels (e.g. "Inspection" + "Type(s)" on two rows).
+    if (j + 1 < numRows && found < FIELD_PATTERNS.length) {
+      var stitched = stitchedItems(j, j + 1);
+      var uniqStitched = collectMatches([stitched]);
+      if (uniqStitched.length > uniq.length) {
+        var colToFieldStitched = mapToColumns(uniqStitched);
+        var foundStitched = colToFieldStitched.filter(Boolean).length;
+        if (foundStitched > found) {
+          return { headerRowIdx: j + 1, colToField: colToFieldStitched };
+        }
+      }
+    }
+
     if (found >= 3) return { headerRowIdx: j, colToField: colToField };
   }
   return { headerRowIdx: -1, colToField: new Array(numCols).fill(null) };
