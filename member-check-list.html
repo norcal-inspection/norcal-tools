@@ -1171,12 +1171,12 @@ function identifyHeaderRow(items, rowBoundaries, colsAsc) {
     }
     return -1;
   }
-  function colForX(x) {
-    for (var i = 0; i < numCols; i++) {
-      if (x >= colsAsc[i] - 0.5 && x < colsAsc[i + 1] - 0.5) return i;
-    }
-    return -1;
-  }
+
+  // Compute the median column width once — the splitter uses it to
+  // decide which text items are "wide" enough to carve across columns.
+  var colWidths = [];
+  for (var cw = 0; cw < numCols; cw++) colWidths.push(colsAsc[cw + 1] - colsAsc[cw]);
+  var medW = median(colWidths);
 
   var itemsByRow = [];
   for (var jj = 0; jj < numRows; jj++) itemsByRow.push([]);
@@ -1187,38 +1187,32 @@ function identifyHeaderRow(items, rowBoundaries, colsAsc) {
     if (rIdx >= 0) itemsByRow[rIdx].push(it);
   }
 
-  // Build per-column concatenated text for a given set of row-items.
-  // Many templates wrap long column headers onto two visual lines within
-  // a single row-band — e.g. "Inspection" above "Type(s)". PDF.js emits
-  // those as separate text items. Grouping by which column each item's
-  // x-center falls in lets us reunite them into one logical label.
-  // Items whose x-center falls outside the column grid are dropped.
+  // Build per-column concatenated text for a given row of items. Each
+  // item is first split across columns (wide items like "Member ID
+  // Member Description Weld Type(s)" that PDF.js emits as a single run
+  // get carved at column boundaries). Then for each column we collect
+  // the pieces top-down so wrapped cells (e.g. "Inspection" above
+  // "Type(s)") reunite into their natural reading order.
   function perColumnText(rowItemsList) {
     var cells = [];
-    for (var c = 0; c < numCols; c++) cells.push({ parts: [], xCenter: (colsAsc[c] + colsAsc[c + 1]) / 2 });
+    for (var c = 0; c < numCols; c++) cells.push({ parts: [] });
     for (var i = 0; i < rowItemsList.length; i++) {
       var it = rowItemsList[i];
-      var itX = it.transform[4];
-      var itW = it.width || estimateWidth(it.str);
-      var cx = itX + itW / 2;
-      var col = colForX(cx);
-      if (col < 0) continue;
-      cells[col].parts.push({ y: it.transform[5], str: it.str });
+      var pieces = splitItemByColumns(it, colsAsc, medW);
+      for (var p = 0; p < pieces.length; p++) {
+        cells[pieces[p].col].parts.push({ y: it.transform[5], str: pieces[p].text });
+      }
     }
-    // Sort each cell's parts top-down (largest y first) so wrapped text
-    // reads in its natural order when joined.
     var out = [];
     for (var c2 = 0; c2 < numCols; c2++) {
       var parts = cells[c2].parts;
       parts.sort(function(a, b) { return b.y - a.y; });
       var joined = parts.map(function(p) { return p.str; }).join(' ').replace(/\s+/g, ' ').trim();
-      out.push({ col: c2, str: joined, xCenter: cells[c2].xCenter });
+      out.push({ col: c2, str: joined });
     }
     return out;
   }
 
-  // Match field patterns against the per-column text. Returns a
-  // colToField array mapping each column index to a field name (or null).
   function mapColumnsToFields(perCol) {
     var colToField = new Array(numCols).fill(null);
     var usedFields = {};
@@ -1238,10 +1232,6 @@ function identifyHeaderRow(items, rowBoundaries, colsAsc) {
     return colToField;
   }
 
-  // Try each row-band from the top down. The first one that yields ≥3
-  // field matches is declared the header row. This handles pages where
-  // some text (e.g. the "MEMBER CHECK LIST" title) sits above the table
-  // in its own pseudo-row.
   for (var j = 0; j < numRows; j++) {
     var rowItems = itemsByRow[j];
     if (rowItems.length === 0) continue;
@@ -1286,6 +1276,65 @@ function snapToWhitespace(s, idx) {
     if (idx - d > 0 && /\s/.test(s[idx - d - 1])) return idx - d;
   }
   return idx;
+}
+
+// Given a text item and the table's column boundaries, return the list
+// of { col, text } pieces the item should be split into. Most items fit
+// in a single column and return one piece. "Wide" items whose x-range
+// spans multiple column rectangles get carved at the column boundaries
+// — proportionally by character count, then snapped to the nearest
+// whitespace so words don't get cut in half.
+//
+// This is shared between header-row label detection and data-row
+// placement so both see consistent column membership.
+function splitItemByColumns(item, colsAsc, medW) {
+  var str = item.str;
+  var xp = item.transform[4];
+  var wp = item.width || estimateWidth(str);
+  var numCols = colsAsc.length - 1;
+  var SPAN = 1.5;
+  var isWide = wp > medW * SPAN;
+
+  function colForCenter(cx) {
+    for (var i = 0; i < numCols; i++) {
+      if (cx >= colsAsc[i] - 0.5 && cx < colsAsc[i + 1] - 0.5) return i;
+    }
+    return -1;
+  }
+
+  if (!isWide) {
+    var col = colForCenter(xp + wp / 2);
+    if (col < 0) return [];
+    return [{ col: col, text: str }];
+  }
+  var xL = xp, xR = xp + wp;
+  var spanned = [];
+  for (var ic = 0; ic < numCols; ic++) {
+    var cL = colsAsc[ic], cR = colsAsc[ic + 1];
+    var ov = Math.min(xR, cR) - Math.max(xL, cL);
+    if (ov > 1) spanned.push({ col: ic, right: cR });
+  }
+  if (spanned.length <= 1) {
+    if (spanned[0]) return [{ col: spanned[0].col, text: str }];
+    return [];
+  }
+  var textSpan = xR - xL;
+  var bts = [];
+  for (var bi = 0; bi < spanned.length - 1; bi++) {
+    var splitX = spanned[bi].right;
+    var frac = (splitX - xL) / textSpan;
+    var idx = Math.max(0, Math.min(str.length, Math.round(str.length * frac)));
+    bts.push(snapToWhitespace(str, idx));
+  }
+  var out = [];
+  var start = 0;
+  for (var si = 0; si < spanned.length; si++) {
+    var end = si < bts.length ? bts[si] : str.length;
+    var piece = str.slice(start, end).trim();
+    if (piece) out.push({ col: spanned[si].col, text: piece });
+    start = end;
+  }
+  return out;
 }
 
 function estimateWidth(s) { return s.length * 5; }
