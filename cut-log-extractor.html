@@ -281,8 +281,12 @@ function extractCuts(rawText) {
   if (projMatch) meta.project = projMatch[1].trim().substring(0, 60);
 
   // Strip repeating page headers and footers so cross-page cuts merge cleanly
+  // Strategy: strip the TESTING/INSPECTION/ENGINEERING block up through the last known
+  // header line (Inspection Request no., TIO Index, HCAI#, or Wind Speed) — all of
+  // which appear in both single-column and two-column merged header formats.
+  // We do NOT use a field-label lookahead because that can consume cut data on the next page.
   let text = rawText.replace(
-    /TESTING\s*\nINSPECTION\s*\nENGINEERING\s*\n[\s\S]*?Inspection Request\s*no\.?\s*[:\.]?\s*\d+\s*\n/gi,
+    /TESTING\s*\nINSPECTION\s*\nENGINEERING\s*\n[\s\S]*?(?:Inspection Request\s*no\.?\s*[:\.]?\s*\d+|Wind Speed\s*[:\.]?[^\n]*)\s*\n/gi,
     '\n'
   );
   text = text.replace(/2118 Rheem Drive[\s\S]*?Fax \(510\) 835-1825\s*\n/g, '\n');
