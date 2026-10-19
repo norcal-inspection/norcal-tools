@@ -260,6 +260,7 @@ table.records tr:last-child td { border-bottom: none; }
     <button class="diag-tab-btn active" data-tab="incomplete">Incomplete <span class="diag-tab-count" id="diagCountIncomplete">0</span></button>
     <button class="diag-tab-btn" data-tab="residual">Residual Pool <span class="diag-tab-count" id="diagCountResidual">0</span></button>
     <button class="diag-tab-btn" data-tab="countbased">Count-Based Assessment <span class="diag-tab-count" id="diagCountCountbased">0</span></button>
+    <button class="diag-tab-btn" data-tab="flagged">Phrase Flagged <span class="diag-tab-count" id="diagCountFlagged">0</span></button>
   </div>
 
   <div class="diag-tab-content active" id="diagTab-incomplete">
@@ -288,6 +289,16 @@ table.records tr:last-child td { border-bottom: none; }
       <table class="records">
         <thead><tr><th>IR#</th><th>Pool/Dest/Quota</th><th>Ex#</th><th>Inspector</th><th>Date</th><th>Verdict</th><th>Description</th></tr></thead>
         <tbody id="diagCountbasedTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="diag-tab-content" id="diagTab-flagged">
+    <div class="diag-note">Source rows containing a non-event phrase ("no work performed", "cancel(ed)", "not ready", "not performed", "in progress") somewhere in the description. These are <strong>never dropped</strong> &mdash; they still run through the normal missing-check, and if identified as genuinely new get a caution note on the tracking sheet. Use this tab to watch for volume creep; if too many real non-events start flowing through, the phrase filter may need to come back (segment-aware, not a blind substring test).</div>
+    <div class="records-body">
+      <table class="records">
+        <thead><tr><th>Row</th><th>Ex#</th><th>IR#</th><th>Inspector</th><th>Date</th><th>Phrase</th><th>Description</th></tr></thead>
+        <tbody id="diagFlaggedTbody"></tbody>
       </table>
     </div>
   </div>
@@ -324,7 +335,14 @@ const DEST_SHEETS = [
   { id: '7967229074165636', name: 'INC 3 Base Metal Repair Log', issueCol: 781820290092932,  irCol: 1907720196935556 }
 ];
 
-const EXCLUDE_PHRASES = ['no work performed', 'cancel', 'not ready', 'not performed', 'in progress'];
+// These used to silently drop matching rows (the old "exclusion filter"). As of 2026-10-19,
+// substring matches on a multi-exception description were nuking the whole row over one
+// innocuous phrase in an unrelated sub-exception — e.g. IR#8549's "Weld not performed."
+// buried an entire 3-exception row that was genuinely missing from the OIL logs. Nothing is
+// dropped anymore: a match here just adds a caution note to the tracking-sheet row so a human
+// decides. Monitor the new "Phrase Flagged" diagnostics tab — if real non-events start flowing
+// through in volume, reintroduce filtering here with segment-aware logic, not a blind substring test.
+const FLAG_PHRASES = ['no work performed', 'cancel', 'not ready', 'not performed', 'in progress'];
 const ISSUE_RE = /Exception from (?:CTS\s+)?(.+?)\s+on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(?:for|under)\s+IR#?\s*(\d+)/i;
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -436,9 +454,10 @@ function parseIssueText(text) {
   };
 }
 
-function isExcluded(desc) {
+// Returns the matched phrase (lowercase) or null. No longer used to drop rows — see FLAG_PHRASES comment.
+function matchFlagPhrase(desc) {
   const d = String(desc || '').toLowerCase();
-  return EXCLUDE_PHRASES.some(p => d.includes(p));
+  return FLAG_PHRASES.find(p => d.includes(p)) || null;
 }
 
 // Shared key-phrase substring test for the 6a/6b description-match checks.
@@ -616,6 +635,18 @@ function buildResidualRow(r) {
   </tr>`;
 }
 
+function buildFlaggedRow(r) {
+  return `<tr>
+    <td>${esc(r.rowNumber || '')}</td>
+    <td>${esc(r.exNum || '')}</td>
+    <td>${esc(r.ir || '')}</td>
+    <td>${esc(r.inspector || '')}</td>
+    <td>${esc(r.date || '')}</td>
+    <td><span class="badge badge-skip">${esc(r.phrase)}</span></td>
+    <td>${shortDesc(r.desc)}</td>
+  </tr>`;
+}
+
 function buildCountBasedRow(r) {
   const badgeCls = r.verdict === 'selected' ? 'badge-selected' : r.verdict === 'capped' ? 'badge-capped' : 'badge-tracked';
   const label = r.verdict === 'selected' ? 'selected — flagged missing' : r.verdict === 'capped' ? 'capped — quota exhausted' : 'already tracked';
@@ -670,7 +701,7 @@ async function run() {
 
   const stats = { added: 0, vanished: 0, reappeared: 0, matched: 0, errors: 0 };
   let newRowsHtml = '', vanishedRowsHtml = '', reappearedRowsHtml = '';
-  let incompleteRows = [], residualPoolRows = [], countBasedRows = [];
+  let incompleteRows = [], residualPoolRows = [], countBasedRows = [], flaggedPhraseRows = [];
 
   try {
     setProgress('Loading source Exceptions sheet…', 5);
@@ -712,9 +743,9 @@ async function run() {
     });
     log(`Parsed ${parsedDestKeys.size} exact-match destination key(s); residual coverage tracked for ${Object.keys(unparsedDestIRCounts).length} IR#(s).`, 'info');
 
-    setProgress('Applying exclusion filter…', 55);
+    setProgress('Scanning for non-event phrases…', 55);
     const filteredSource = [];
-    let excludedCount = 0, skippedIncomplete = 0, skippedPreCutoff = 0;
+    let flaggedCount = 0, skippedIncomplete = 0, skippedPreCutoff = 0;
     srcData.rows.forEach(row => {
       const ir = String(cellVal(row, SRC.ir) || '').trim();
       const inspector = String(cellVal(row, SRC.inspector) || '').trim();
@@ -734,7 +765,16 @@ async function run() {
         });
         return;
       }
-      if (isExcluded(desc)) { excludedCount++; return; }
+      // Flag, never drop — a phrase buried in one sub-exception of a multi-exception
+      // description used to silently nuke the whole row (see FLAG_PHRASES comment above).
+      const excludePhrase = matchFlagPhrase(desc);
+      if (excludePhrase) {
+        flaggedCount++;
+        flaggedPhraseRows.push({
+          rowNumber: row.rowNumber, exNum: cellVal(row, SRC.exNum),
+          ir, inspector, date: dateRaw, desc, phrase: excludePhrase
+        });
+      }
       filteredSource.push({
         rowId: row.id,
         exNum: cellVal(row, SRC.exNum),
@@ -746,10 +786,11 @@ async function run() {
         desc,
         closedBy: cellVal(row, SRC.closedBy),
         closeDate: cellVal(row, SRC.closeDate),
-        resNotes: cellVal(row, SRC.resNotes)
+        resNotes: cellVal(row, SRC.resNotes),
+        excludePhrase
       });
     });
-    log(`${filteredSource.length} eligible source row(s) after exclusion filter (excluded ${excludedCount}, skipped ${skippedIncomplete} incomplete, ${skippedPreCutoff} before ${formatMDY(cutoff)}).`, 'info');
+    log(`${filteredSource.length} eligible source row(s) (${flaggedCount} phrase-flagged for review, not dropped; skipped ${skippedIncomplete} incomplete, ${skippedPreCutoff} before ${formatMDY(cutoff)}).`, 'info');
 
     setProgress('Exact-matching against destination logs…', 65);
     const residualPool = {};
@@ -830,12 +871,15 @@ async function run() {
           break;
         }
       }
-      let trackingNotes = '', matchTag = '';
       const sentence6a = note6a ? `⚠️ Similar description found on ${note6a}, IR#${c.ir} — verify not already logged before creating a new entry.` : '';
       const sentence6b = note6b ? `⚠️ Possible duplicate of Ex#${note6b.exNum} — same IR# and Inspector, tracked ${formatMDY(note6b.date)}, ${note6b.days} day(s) apart, descriptions overlap. Confirm this is a distinct occurrence before logging.` : '';
-      if (note6a && note6b) { trackingNotes = `${sentence6a} ${sentence6b}`; matchTag = '6a+6b'; }
-      else if (note6a)      { trackingNotes = sentence6a; matchTag = '6a'; }
-      else if (note6b)      { trackingNotes = sentence6b; matchTag = '6b'; }
+      const sentenceFlag = c.excludePhrase ? `⚠️ Description contains possible non-event phrase ("${c.excludePhrase}") — verify this is a real exception before logging.` : '';
+      const tagParts = [];
+      if (note6a) tagParts.push('6a');
+      if (note6b) tagParts.push('6b');
+      if (c.excludePhrase) tagParts.push('flag');
+      const trackingNotes = [sentence6a, sentence6b, sentenceFlag].filter(Boolean).join(' ');
+      const matchTag = tagParts.join('+');
       return { ...c, trackingNotes, matchTag };
     });
 
@@ -999,7 +1043,7 @@ async function run() {
 
     document.getElementById('diagPanel').classList.add('visible');
     document.getElementById('diagHeaderCount').textContent =
-      `${incompleteRows.length} incomplete · ${residualPoolRows.length} residual · ${countBasedRows.length} count-based`;
+      `${incompleteRows.length} incomplete · ${residualPoolRows.length} residual · ${countBasedRows.length} count-based · ${flaggedPhraseRows.length} phrase-flagged`;
 
     document.getElementById('diagIncompleteTbody').innerHTML = incompleteRows.map(buildIncompleteRow).join('');
     document.getElementById('diagCountIncomplete').textContent = incompleteRows.length;
@@ -1011,6 +1055,10 @@ async function run() {
     const sortedCountBased = [...countBasedRows].sort((a, b) => a.ir.localeCompare(b.ir, undefined, { numeric: true }) || (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     document.getElementById('diagCountbasedTbody').innerHTML = sortedCountBased.map(buildCountBasedRow).join('');
     document.getElementById('diagCountCountbased').textContent = countBasedRows.length;
+
+    const sortedFlagged = [...flaggedPhraseRows].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    document.getElementById('diagFlaggedTbody').innerHTML = sortedFlagged.map(buildFlaggedRow).join('');
+    document.getElementById('diagCountFlagged').textContent = flaggedPhraseRows.length;
 
     const cappedCount = countBasedRows.filter(r => r.verdict === 'capped').length;
     if (cappedCount) log(`${cappedCount} residual row(s) capped out by quota — potential ghosts, see Diagnostics tab.`, 'warn');
