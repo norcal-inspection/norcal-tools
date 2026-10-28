@@ -58,6 +58,9 @@
   .log-panel.visible{display:block;}
   .log-header{padding:10px 14px;background:var(--surface2);font-family:var(--mono);font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;}
   .log-body{padding:14px;font-family:var(--mono);font-size:12px;line-height:1.8;max-height:280px;overflow-y:auto;}
+  .resume-banner{display:none;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin-bottom:14px;border:1px solid var(--orange);border-radius:5px;font-family:var(--mono);font-size:12px;}
+  .resume-banner.visible{display:flex;}
+  .resume-banner span{flex:1;min-width:200px;}
   .log-line{display:flex;gap:10px;}
   .log-time{color:#555;flex-shrink:0;}
   .log-info{color:var(--text-dim);}
@@ -209,6 +212,10 @@
 
 <div class="panel">
   <h2>Step 2 &mdash; Upload PDFs</h2>
+  <div class="resume-banner" id="resumeBanner">
+    <span id="resumeText"></span>
+    <button class="btn btn-danger" onclick="discardCheckpoint()">Discard saved progress</button>
+  </div>
   <div class="drop-zone" id="dropZone">
     <input type="file" id="fileInput" multiple accept=".pdf" webkitdirectory directory>
     <span class="drop-icon">&#x1F4C1;</span>
@@ -274,7 +281,10 @@
 <div class="log-panel" id="pushLogPanel">
   <div class="log-header">
     <span>Push Activity Log</span>
-    <span id="pushLogCount" style="color:var(--text-dim);"></span>
+    <span>
+      <button class="btn-mini hidden" id="notFoundCsvBtn" onclick="downloadNotFoundCsv()">Download Not Found (CSV)</button>
+      <span id="pushLogCount" style="color:var(--text-dim);"></span>
+    </span>
   </div>
   <div class="log-body" id="pushLogBody"></div>
 </div>
@@ -383,6 +393,97 @@ var dispositions = {};
 // resolve dispositions back to records without re-running dedup).
 var lastSuspects = [];
 var lastApproved = [];
+// Approved groups in display order, for lazily rendering collapsed groups.
+var lastApprovedGroups = [];
+// Unique pushed Member IDs that weren't found on the Shadow List.
+var lastNotFoundIds = [];
+var APPROVED_LAZY_THRESHOLD = 40;
+
+// ─────────────────────────────────────────────────────────────
+//  CHECKPOINT (resume after crash)
+// ─────────────────────────────────────────────────────────────
+// Each parsed file's result is saved to IndexedDB, keyed by
+// name|size|lastModified. If the tab dies mid-run, re-selecting the
+// same folder and clicking Parse reuses saved results and only parses
+// files that weren't finished. Bump CHECKPOINT_VERSION whenever the
+// parsing logic changes so stale results are ignored.
+var CHECKPOINT_VERSION = 1;
+var CHECKPOINT_DB = 'mcl_checkpoint';
+var CHECKPOINT_STORE = 'files';
+var checkpointDbPromise = null;
+
+function fileSignature(file) {
+  return file.name + '|' + file.size + '|' + file.lastModified;
+}
+
+function openCheckpointDb() {
+  if (checkpointDbPromise) return checkpointDbPromise;
+  checkpointDbPromise = new Promise(function(resolve) {
+    try {
+      var req = indexedDB.open(CHECKPOINT_DB, 1);
+      req.onupgradeneeded = function() { req.result.createObjectStore(CHECKPOINT_STORE); };
+      req.onsuccess = function() { resolve(req.result); };
+      req.onerror = function() { resolve(null); };
+    } catch (_) { resolve(null); }
+  });
+  return checkpointDbPromise;
+}
+
+function checkpointTx(mode, fn) {
+  return openCheckpointDb().then(function(db) {
+    if (!db) return null;
+    return new Promise(function(resolve) {
+      try {
+        var tx = db.transaction(CHECKPOINT_STORE, mode);
+        var result = fn(tx.objectStore(CHECKPOINT_STORE));
+        tx.oncomplete = function() { resolve(result && 'result' in result ? result.result : null); };
+        tx.onerror = tx.onabort = function() { resolve(null); };
+      } catch (_) { resolve(null); }
+    });
+  });
+}
+
+function checkpointGetAll() {
+  return checkpointTx('readonly', function(store) { return store.getAll(); })
+    .then(function(all) {
+      var map = {};
+      (all || []).forEach(function(e) { if (e && e.v === CHECKPOINT_VERSION) map[e.sig] = e; });
+      return map;
+    });
+}
+
+function checkpointSave(sig, res) {
+  return checkpointTx('readwrite', function(store) {
+    store.put({ v: CHECKPOINT_VERSION, sig: sig, records: res.records, warnings: res.warnings || [], savedAt: Date.now() }, sig);
+  });
+}
+
+function checkpointClear() {
+  return checkpointTx('readwrite', function(store) { store.clear(); });
+}
+
+async function refreshResumeBanner() {
+  var map = await checkpointGetAll();
+  var sigs = Object.keys(map);
+  var banner = document.getElementById('resumeBanner');
+  if (sigs.length === 0) { banner.classList.remove('visible'); return; }
+  var records = 0, latest = 0;
+  for (var i = 0; i < sigs.length; i++) {
+    records += map[sigs[i]].records.length;
+    latest = Math.max(latest, map[sigs[i]].savedAt || 0);
+  }
+  document.getElementById('resumeText').textContent =
+    'Saved progress found: ' + sigs.length + ' file(s) already parsed (' + records + ' records), last saved '
+    + new Date(latest).toLocaleString() + '. Re-select the same folder and click Parse PDFs to resume.';
+  banner.classList.add('visible');
+}
+
+async function discardCheckpoint() {
+  await checkpointClear();
+  refreshResumeBanner();
+}
+
+refreshResumeBanner();
 
 // ─────────────────────────────────────────────────────────────
 //  FILE INTAKE
@@ -479,6 +580,7 @@ function addFiles(files) {
 }
 
 function clearFiles() {
+  checkpointClear().then(refreshResumeBanner);
   queuedFiles = [];
   allRecords = [];
   stats = { files: 0, records: 0, warnings: 0, errors: 0 };
@@ -518,16 +620,26 @@ function renderFileList() {
   document.getElementById('clearBtn').classList.remove('hidden');
   document.getElementById('fileCount').textContent = queuedFiles.length + ' queued';
   var html = '';
-  for (var i = 0; i < queuedFiles.length; i++) {
-    var q = queuedFiles[i];
-    var statusText = { pending: 'pending', parsing: 'parsing...', ok: 'parsed', err: 'error', skipped: 'skipped' }[q.status] || q.status;
-    html += '<div class="file-item ' + q.status + '">'
-         + '<span class="fi-icon">&#x1F4C4;</span>'
-         + '<span class="fi-name">' + esc(q.name) + '</span>'
-         + '<span class="fi-status">' + statusText + (q.rows != null ? ' — ' + q.rows + ' rows' : '') + '</span>'
-         + '</div>';
-  }
+  for (var i = 0; i < queuedFiles.length; i++) html += fileItemHtml(i);
   list.innerHTML = html;
+}
+
+function fileItemHtml(i) {
+  var q = queuedFiles[i];
+  var statusText = { pending: 'pending', parsing: 'parsing...', ok: 'parsed', err: 'error', skipped: 'skipped' }[q.status] || q.status;
+  if (q.restored) statusText += ' (saved)';
+  return '<div class="file-item ' + q.status + '" id="fi-' + i + '">'
+       + '<span class="fi-icon">&#x1F4C4;</span>'
+       + '<span class="fi-name">' + esc(q.name) + '</span>'
+       + '<span class="fi-status">' + statusText + (q.rows != null ? ' — ' + q.rows + ' rows' : '') + '</span>'
+       + '</div>';
+}
+
+// Update one row of the file list in place — avoids rebuilding all
+// 700+ rows on every status change.
+function updateFileItem(i) {
+  var el = document.getElementById('fi-' + i);
+  if (el) el.outerHTML = fileItemHtml(i);
 }
 
 function updateParseBtn() {
@@ -753,12 +865,7 @@ function buildNarrowKeyMap(sheetRows, colMap) {
 
 // Small helper for the push log panel (separate from the parse log).
 function pushLog(msg, type) {
-  var body = document.getElementById('pushLogBody');
-  var ts = new Date().toLocaleTimeString('en-US', { hour12: false });
-  var cls = { info: 'log-info', success: 'log-success', error: 'log-error', warn: 'log-warn' }[type || 'info'] || 'log-info';
-  body.innerHTML += '<div class="log-line"><span class="log-time">[' + ts + ']</span><span class="' + cls + '">' + esc(msg) + '</span></div>';
-  body.scrollTop = body.scrollHeight;
-  document.getElementById('pushLogCount').textContent = body.querySelectorAll('.log-line').length + ' entries';
+  appendLogLine('pushLogBody', 'pushLogCount', msg, type);
 }
 
 // Compute how many records are eligible for push right now and whether
@@ -986,6 +1093,8 @@ async function pushApproved() {
   btn.innerHTML = '<span class="spinner"></span> Pushing...';
   document.getElementById('pushLogBody').innerHTML = '';
   document.getElementById('pushLogPanel').classList.add('visible');
+  lastNotFoundIds = [];
+  document.getElementById('notFoundCsvBtn').classList.add('hidden');
   pushLog('Starting push — ' + toPush.length + ' record(s)', 'info');
 
   try {
@@ -1164,11 +1273,37 @@ async function updateShadowList(token, shadowId, memberIds) {
   pushLog('', 'info');
   pushLog('Shadow List summary: ' + matched + ' colored, ' + alreadyGreen + ' already green, ' + notFound + ' not found',
     notFound > 0 ? 'warn' : 'success');
+  // notFoundList is already unique (ids were deduped above).
+  lastNotFoundIds = notFoundList.slice();
+  document.getElementById('notFoundCsvBtn').classList.toggle('hidden', notFoundList.length === 0);
   if (notFoundList.length > 0) {
     pushLog('Not found: ' + notFoundList.join(', '), 'warn');
+    pushLog('Use "Download Not Found (CSV)" above to export this list.', 'info');
   }
 }
 
+
+// Export the Shadow List "not found" Member IDs as CSV (opens directly
+// in Excel). One unique ID per row, sorted.
+function downloadNotFoundCsv() {
+  if (lastNotFoundIds.length === 0) return;
+  function cell(v) {
+    var t = String(v == null ? '' : v);
+    return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  }
+  var ids = lastNotFoundIds.slice().sort(function(a, b) {
+    return a.localeCompare(b, undefined, { numeric: true });
+  });
+  var lines = ['Member ID'].concat(ids.map(cell));
+  // BOM so Excel reads it as UTF-8.
+  var blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'shadow-list-not-found-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+}
 
 async function parseAll() {
   var btn = document.getElementById('parseBtn');
@@ -1189,29 +1324,42 @@ async function parseAll() {
   // Update parse button to show running progress.
   var parseBtn = document.getElementById('parseBtn');
 
+  // Results saved from an earlier (interrupted) run of the same files.
+  var saved = await checkpointGetAll();
+  var restoredCount = 0;
+  for (var si = 0; si < queuedFiles.length; si++) {
+    if (saved[fileSignature(queuedFiles[si].file)]) restoredCount++;
+  }
+  if (restoredCount > 0) {
+    log('Resuming — ' + restoredCount + ' file(s) restored from saved progress, '
+      + (queuedFiles.length - restoredCount) + ' left to parse', 'info');
+  }
+  renderFileList();
+
   for (var i = 0; i < queuedFiles.length; i++) {
     var q = queuedFiles[i];
+    var sig = fileSignature(q.file);
+    var cached = saved[sig];
     q.status = 'parsing';
+    q.restored = !!cached;
     parseBtn.innerHTML = '<span class="spinner"></span> Parsing ' + (i + 1) + ' / ' + queuedFiles.length + '...';
-    // Re-render file list periodically — for huge batches, doing it
-    // every iteration creates DOM thrash that slows everything down.
-    if (queuedFiles.length <= 50 || i % 10 === 0) renderFileList();
     try {
-      var res = await parseOneFile(q.file);
+      var res = cached || await parseOneFile(q.file);
+      if (!cached) await checkpointSave(sig, res);
       q.rows = res.records.length;
       if (res.records.length === 0) {
         q.status = 'skipped';
-        log(q.name + ': no MEMBER CHECK LIST page found', 'warn');
+        if (!cached) log(q.name + ': no MEMBER CHECK LIST page found', 'warn');
         stats.warnings++;
       } else {
         q.status = 'ok';
-        allRecords = allRecords.concat(res.records);
+        for (var rr = 0; rr < res.records.length; rr++) allRecords.push(res.records[rr]);
         stats.records += res.records.length;
-        log(q.name + ': ' + res.records.length + ' record(s)', 'success');
+        if (!cached) log(q.name + ': ' + res.records.length + ' record(s)', 'success');
       }
       if (res.warnings && res.warnings.length) {
         for (var w = 0; w < res.warnings.length; w++) {
-          log('  ⚠ ' + res.warnings[w], 'warn');
+          if (!cached) log('  ⚠ ' + res.warnings[w], 'warn');
           stats.warnings++;
         }
       }
@@ -1222,6 +1370,9 @@ async function parseAll() {
       console.error(e);
     }
     stats.files++;
+    updateFileItem(i);
+    // Restored files need no yield — only real parses touch PDF.js.
+    if (cached) continue;
     // Yield to the browser so it can paint progress AND so the GC can
     // run between files. Without this, a long synchronous-feeling chain
     // of awaits never gives the runtime a chance to free PDF.js's
@@ -1899,18 +2050,25 @@ function renderApprovedGroups(records) {
     if (dateA !== dateB) return dateA - dateB;
     return (ga.rep || '').localeCompare(gb.rep || '');
   });
+  // Big batches start collapsed and build each table on first expand,
+  // so the page doesn't have to lay out thousands of rows at once.
+  var lazy = keys.length > APPROVED_LAZY_THRESHOLD;
+  lastApprovedGroups = [];
   var html = '';
   for (var k = 0; k < keys.length; k++) {
     var g = groups[keys[k]];
+    lastApprovedGroups.push(g);
     var title = 'IR #' + (g.ir || '—') + ' — ' + (g.date || '—') + ' — ' + (g.rep || '—');
     html +=
         '<div class="group">'
-      +   '<div class="group-header" onclick="toggleGroup(this)">'
+      +   '<div class="group-header' + (lazy ? ' collapsed' : '') + '" onclick="toggleGroup(this)">'
       +     '<span class="gh-caret">&#x25BC;</span>'
       +     '<span class="gh-title">' + esc(title) + '</span>'
       +     '<span class="gh-count">' + g.records.length + ' record(s)</span>'
       +   '</div>'
-      +   '<div class="group-body">' + renderRecordsTable(g.records) + '</div>'
+      +   (lazy
+            ? '<div class="group-body collapsed" data-group="' + k + '"></div>'
+            : '<div class="group-body">' + renderRecordsTable(g.records) + '</div>')
       + '</div>';
   }
   return html;
@@ -1998,17 +2156,27 @@ function renderSuspectItem(suspect) {
 
 function setDisposition(suspectId, choice) {
   dispositions[suspectId] = choice;
-  // Re-render only the affected suspect item.
-  var suspectedPane = document.getElementById('suspectedPane');
-  // Find the current suspect object by id.
-  // We re-render the whole pane for simplicity — suspect count is small.
-  renderRecords();
-  switchTab('suspected');
+  // Re-render only the affected suspect item — a full re-render of
+  // hundreds of suspect cards on every click is slow on big batches.
+  var el = document.getElementById('suspect-' + suspectId);
+  for (var i = 0; i < lastSuspects.length; i++) {
+    if (lastSuspects[i].suspectId === suspectId) {
+      if (el) el.outerHTML = renderSuspectItem(lastSuspects[i]);
+      break;
+    }
+  }
+  updatePushBtn();
 }
 
 function toggleGroup(headerEl) {
-  headerEl.classList.toggle('collapsed');
   var body = headerEl.nextElementSibling;
+  // Lazily build the table for groups that started collapsed.
+  if (body && body.hasAttribute('data-group')) {
+    var g = lastApprovedGroups[parseInt(body.getAttribute('data-group'), 10)];
+    body.innerHTML = renderRecordsTable(g.records);
+    body.removeAttribute('data-group');
+  }
+  headerEl.classList.toggle('collapsed');
   if (body) body.classList.toggle('collapsed');
 }
 
@@ -2040,12 +2208,26 @@ function renderRecordsTable(records) {
 //  LOG
 // ─────────────────────────────────────────────────────────────
 function log(msg, type) {
-  var body = document.getElementById('logBody');
+  appendLogLine('logBody', 'logCount', msg, type);
+}
+
+// Append one line without re-parsing the whole log (innerHTML += is
+// quadratic and froze the tab on 700+ file runs). Only the most recent
+// LOG_MAX_LINES stay on screen; the entry count still reflects all.
+var LOG_MAX_LINES = 500;
+var logTotals = {};
+function appendLogLine(bodyId, countId, msg, type) {
+  var body = document.getElementById(bodyId);
+  if (!body.firstChild) logTotals[bodyId] = 0;
+  logTotals[bodyId] = (logTotals[bodyId] || 0) + 1;
   var ts = new Date().toLocaleTimeString('en-US', { hour12: false });
   var cls = { info: 'log-info', success: 'log-success', error: 'log-error', warn: 'log-warn' }[type || 'info'] || 'log-info';
-  body.innerHTML += '<div class="log-line"><span class="log-time">[' + ts + ']</span><span class="' + cls + '">' + esc(msg) + '</span></div>';
+  body.insertAdjacentHTML('beforeend', '<div class="log-line"><span class="log-time">[' + ts + ']</span><span class="' + cls + '">' + esc(msg) + '</span></div>');
+  while (body.childElementCount > LOG_MAX_LINES) body.removeChild(body.firstChild);
   body.scrollTop = body.scrollHeight;
-  document.getElementById('logCount').textContent = body.querySelectorAll('.log-line').length + ' entries';
+  var total = logTotals[bodyId];
+  document.getElementById(countId).textContent = total + ' entries'
+    + (total > LOG_MAX_LINES ? ' (showing last ' + LOG_MAX_LINES + ')' : '');
 }
 
 function esc(str) {
