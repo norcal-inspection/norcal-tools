@@ -763,29 +763,60 @@ async function testConnection() {
   }
 }
 
-async function fetchSheet(token, sheetId) {
-  var url = PROXY_BASE + '/2.0/sheets/' + encodeURIComponent(sheetId);
-  var response;
-  try {
-    response = await fetch(url, {
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + token },
-    });
-  } catch (networkErr) {
-    throw new Error('Network error — ' + networkErr.message);
+// Smartsheet allows ~300 requests/min per token. On 429 (rate limited)
+// wait and retry. GET/PUT also retry on network errors and 5xx; POST
+// (row adds) does not, since the rows may already have been added.
+var SM_MAX_RETRIES = 5;
+async function smFetch(token, method, path, body) {
+  var safeToRetry = method !== 'POST';
+  var headers = { 'Authorization': 'Bearer ' + token };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  for (var attempt = 0; ; attempt++) {
+    var response = null, netErr = null;
+    try {
+      response = await fetch(PROXY_BASE + path, {
+        method: method,
+        headers: headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) { netErr = e; }
+    var retryable = response
+      ? (response.status === 429 || (safeToRetry && response.status >= 500))
+      : safeToRetry;
+    if (!retryable || attempt >= SM_MAX_RETRIES) {
+      if (netErr) throw new Error('Network error — ' + netErr.message);
+      return response;
+    }
+    var waitMs = Math.min(60000, 2000 * Math.pow(2, attempt));
+    var retryAfter = response ? parseInt(response.headers.get('Retry-After'), 10) : 0;
+    if (retryAfter > 0) waitMs = retryAfter * 1000;
+    if (pushInProgress) {
+      pushLog('  … Smartsheet ' + (response ? 'HTTP ' + response.status : 'network error')
+        + ' — waiting ' + Math.round(waitMs / 1000) + 's and retrying', 'warn');
+    }
+    await new Promise(function(resolve) { setTimeout(resolve, waitMs); });
   }
+}
+
+// Throw a readable error for a non-OK response; .httpStatus lets callers
+// tell a rejected request (nothing applied) from an ambiguous failure.
+async function smCheck(response) {
+  if (response.ok) return response.json();
+  var body = ''; try { body = await response.text(); } catch (_) {}
+  var err = new Error('HTTP ' + response.status + (body ? ' — ' + body.slice(0, 180) : ''));
+  err.httpStatus = response.status;
+  throw err;
+}
+
+async function fetchSheet(token, sheetId) {
+  var response = await smFetch(token, 'GET', '/2.0/sheets/' + encodeURIComponent(sheetId));
   if (response.status === 401 || response.status === 403) {
     throw new Error('Authentication failed (HTTP ' + response.status + '). Check the token.');
   }
   if (response.status === 404) {
     throw new Error('Sheet not found (404). Check the sheet ID.');
   }
-  if (!response.ok) {
-    var body = '';
-    try { body = await response.text(); } catch (_) {}
-    throw new Error('HTTP ' + response.status + (body ? ' — ' + body.slice(0, 120) : ''));
-  }
-  return response.json();
+  return smCheck(response);
 }
 
 // Map Smartsheet column titles → our internal field keys.
@@ -871,11 +902,14 @@ function pushLog(msg, type) {
 // Compute how many records are eligible for push right now and whether
 // the button should be enabled.
 function countPushable() {
-  var n = lastApproved ? lastApproved.length : 0;
+  var n = 0;
+  for (var a = 0; a < (lastApproved || []).length; a++) {
+    if (!lastApproved[a]._pushed) n++;
+  }
   if (lastSuspects) {
     for (var i = 0; i < lastSuspects.length; i++) {
       var d = dispositions[lastSuspects[i].suspectId];
-      if (d === 'add') n++;
+      if (d === 'add' && !lastSuspects[i].incoming._pushed) n++;
     }
   }
   return n;
@@ -892,7 +926,7 @@ function updatePushBtn() {
   if (n === 0) {
     sum.textContent = 'No records cleared for push.';
   } else {
-    var approvedCount = lastApproved ? lastApproved.length : 0;
+    var approvedCount = (lastApproved || []).filter(function(r) { return !r._pushed; }).length;
     var addCount = n - approvedCount;
     sum.textContent = addCount > 0
       ? approvedCount + ' approved + ' + addCount + ' from suspected (Add Anyway)'
@@ -944,100 +978,79 @@ function getSectionMemberRows(sheetRows, sectionRowId, memberIdColId) {
   return result;
 }
 
-// Decide which row to insert below for a new record:
+// Work out where each new record goes in a section without re-fetching
+// the sheet after every insert. Simulates the inserts on a local copy of
+// the section, then returns runs of consecutive new records that all sit
+// directly below the same existing row: [{ siblingId, recs }].
+function planSectionInserts(sectionRowId, sectionRows, recs) {
+  var list = sectionRows.map(function(r) { return { mid: r[0], id: r[1] }; });
+  for (var i = 0; i < recs.length; i++) {
+    var pos = insertPosition(list, recs[i].member_id || '?');
+    list.splice(pos, 0, { mid: String(recs[i].member_id || '').trim(), rec: recs[i] });
+  }
+  var blocks = [];
+  var anchor = sectionRowId;
+  var cur = null;
+  for (var j = 0; j < list.length; j++) {
+    if (list[j].rec) {
+      if (!cur) { cur = { siblingId: anchor, recs: [] }; blocks.push(cur); }
+      cur.recs.push(list[j].rec);
+    } else {
+      anchor = list[j].id;
+      cur = null;
+    }
+  }
+  return blocks;
+}
+
+// Index in the section list to insert a new member_id at:
 // 1. If member_id already exists in the section, insert below its last
 //    occurrence (keeps groups together).
 // 2. Otherwise, find the largest existing member_id that's still smaller
 //    than the new one (alphanumeric), and insert below its last row.
-// 3. If the new member_id is smaller than everything, insert below the
-//    section header itself.
-function findInsertSibling(sheetRows, sectionRowId, memberId, memberIdColId) {
-  var sectionRows = getSectionMemberRows(sheetRows, sectionRowId, memberIdColId);
-  if (sectionRows.length === 0) return sectionRowId;
-  // Case 1: existing member_id
-  var lastMatch = null;
-  for (var i = 0; i < sectionRows.length; i++) {
-    if (sectionRows[i][0] === memberId) lastMatch = sectionRows[i][1];
+// 3. If the new member_id is smaller than everything, insert at the top
+//    of the section (directly below the section header).
+function insertPosition(list, memberId) {
+  var lastMatch = -1;
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].mid === memberId) lastMatch = i;
   }
-  if (lastMatch) return lastMatch;
-  // Case 2 & 3: sorted insertion
-  var uniqueIds = [];
+  if (lastMatch !== -1) return lastMatch + 1;
   var seen = {};
-  for (var j = 0; j < sectionRows.length; j++) {
-    var mid = sectionRows[j][0];
-    if (!seen[mid]) { seen[mid] = true; uniqueIds.push(mid); }
+  var all = [];
+  for (var j = 0; j < list.length; j++) {
+    var m = list[j].mid;
+    if (m && !seen[m]) { seen[m] = true; all.push(m); }
   }
-  var all = uniqueIds.slice();
+  if (all.length === 0) return 0;
   all.push(memberId);
   all.sort();
   var newPos = all.indexOf(memberId);
-  if (newPos === 0) return sectionRowId;
+  if (newPos === 0) return 0;
   var predId = all[newPos - 1];
-  var lastPred = null;
-  for (var k = 0; k < sectionRows.length; k++) {
-    if (sectionRows[k][0] === predId) lastPred = sectionRows[k][1];
+  var lastPred = -1;
+  for (var k = 0; k < list.length; k++) {
+    if (list[k].mid === predId) lastPred = k;
   }
-  return lastPred || sectionRowId;
+  return lastPred + 1;
 }
 
-// POST a single row insert. Returns the new row's ID, or null on failure.
-async function addRowBelow(token, sheetId, siblingId, cells) {
-  var response = await fetch(PROXY_BASE + '/2.0/sheets/' + encodeURIComponent(sheetId) + '/rows', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify([{ siblingId: siblingId, below: true, cells: cells }]),
+// POST rows in one request, below siblingId (or at the bottom when
+// siblingId is null). Returns the new row IDs in order.
+async function addRows(token, sheetId, siblingId, cellsList) {
+  var rows = cellsList.map(function(cells) {
+    return siblingId ? { siblingId: siblingId, below: true, cells: cells } : { toBottom: true, cells: cells };
   });
-  if (!response.ok) {
-    var body = ''; try { body = await response.text(); } catch (_) {}
-    throw new Error('HTTP ' + response.status + (body ? ' — ' + body.slice(0, 180) : ''));
-  }
-  var data = await response.json();
-  if (data && data.result && data.result[0] && data.result[0].id) return data.result[0].id;
-  return null;
+  var response = await smFetch(token, 'POST', '/2.0/sheets/' + encodeURIComponent(sheetId) + '/rows', rows);
+  var data = await smCheck(response);
+  var result = (data && data.result) || [];
+  return result.map(function(r) { return r.id; });
 }
 
-async function addRowToBottom(token, sheetId, cells) {
-  var response = await fetch(PROXY_BASE + '/2.0/sheets/' + encodeURIComponent(sheetId) + '/rows', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify([{ toBottom: true, cells: cells }]),
-  });
-  if (!response.ok) {
-    var body = ''; try { body = await response.text(); } catch (_) {}
-    throw new Error('HTTP ' + response.status + (body ? ' — ' + body.slice(0, 180) : ''));
-  }
-  return response.json();
-}
-
-// PUT a cell color update. The format string is Smartsheet's compact
-// encoding — position 9 (0-indexed) is the background color index.
-async function updateCellColor(token, sheetId, rowId, colId, value, colorId) {
-  var response = await fetch(PROXY_BASE + '/2.0/sheets/' + encodeURIComponent(sheetId) + '/rows', {
-    method: 'PUT',
-    headers: {
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify([{
-      id: rowId,
-      cells: [{
-        columnId: colId,
-        value: value,
-        format: ',,,,,,,,,' + colorId + ',,,,,,',
-      }],
-    }]),
-  });
-  if (!response.ok) {
-    var body = ''; try { body = await response.text(); } catch (_) {}
-    throw new Error('HTTP ' + response.status + (body ? ' — ' + body.slice(0, 180) : ''));
-  }
-  return response.json();
+// PUT cell updates for several rows in one request.
+async function updateRows(token, sheetId, rows) {
+  var response = await smFetch(token, 'PUT', '/2.0/sheets/' + encodeURIComponent(sheetId) + '/rows', rows);
+  return smCheck(response);
 }
 
 // Build the cells array for an insert, matching columns by title.
@@ -1068,7 +1081,19 @@ function normalizeForShadow(s) {
   return match.replace(/-/g, '').toUpperCase();
 }
 
+// Rows per Smartsheet request when adding / updating in bulk.
+var ADD_CHUNK = 100;
+var UPDATE_CHUNK = 100;
+var pushInProgress = false;
+
+function warnPushInProgress(e) {
+  e.preventDefault();
+  e.returnValue = '';
+}
+
 // Main push handler — triggered by the Push Approved button.
+// Records already pushed in this session are skipped, so clicking Push
+// again after a partial failure only retries what didn't make it.
 async function pushApproved() {
   var token = document.getElementById('smToken').value.trim();
   var principleId = document.getElementById('smPrincipleId').value.trim();
@@ -1080,9 +1105,11 @@ async function pushApproved() {
 
   // Collect records to push.
   var toPush = [];
-  for (var i = 0; i < lastApproved.length; i++) toPush.push(lastApproved[i]);
+  for (var i = 0; i < lastApproved.length; i++) {
+    if (!lastApproved[i]._pushed) toPush.push(lastApproved[i]);
+  }
   for (var j = 0; j < lastSuspects.length; j++) {
-    if (dispositions[lastSuspects[j].suspectId] === 'add') {
+    if (dispositions[lastSuspects[j].suspectId] === 'add' && !lastSuspects[j].incoming._pushed) {
       toPush.push(lastSuspects[j].incoming);
     }
   }
@@ -1095,10 +1122,13 @@ async function pushApproved() {
   document.getElementById('pushLogPanel').classList.add('visible');
   lastNotFoundIds = [];
   document.getElementById('notFoundCsvBtn').classList.add('hidden');
+  pushInProgress = true;
+  window.addEventListener('beforeunload', warnPushInProgress);
   pushLog('Starting push — ' + toPush.length + ' record(s)', 'info');
+  var progress = { done: 0, total: toPush.length, btn: btn };
 
   try {
-    // Refresh the principle sheet so insertion uses up-to-date state.
+    // Fetch the Principle sheet once; insert positions are planned locally.
     pushLog('Fetching current Principle sheet state...', 'info');
     var sheet = await fetchSheet(token, principleId);
     var colMap = buildColMap(sheet.columns || []);
@@ -1119,6 +1149,10 @@ async function pushApproved() {
       else pushLog('Section "' + label + '" not found — records will go to bottom.', 'warn');
     }
 
+    // Shadow List is loaded once and colored after each section, so an
+    // interrupted push leaves it in step with what was actually added.
+    var shadow = await loadShadowState(token, shadowId);
+
     // Group incoming records by smartsheet_label.
     var groups = {};
     for (var gi = 0; gi < toPush.length; gi++) {
@@ -1127,69 +1161,50 @@ async function pushApproved() {
       groups[lab].push(toPush[gi]);
     }
 
-    var pushedMemberIds = [];
     var pushedCount = 0;
     var failedCount = 0;
 
-    // For each group, insert records one by one, refreshing sheetRows
-    // after each insert so the next sibling lookup reflects the update.
     for (var label in groups) {
       var recs = groups[label];
       pushLog('', 'info');
       pushLog('Pushing to [' + label + '] — ' + recs.length + ' record(s)...', 'info');
       var sectionRowId = locCache[label];
+      var blocks;
+      if (sectionRowId) {
+        var sectionRows = getSectionMemberRows(sheetRows, sectionRowId, memberIdColId);
+        blocks = planSectionInserts(sectionRowId, sectionRows, recs);
+        // Member ID of each anchor row, for log lines.
+        var anchorMid = {};
+        anchorMid[sectionRowId] = 'top of ' + label;
+        for (var sr = 0; sr < sectionRows.length; sr++) anchorMid[sectionRows[sr][1]] = 'under ' + sectionRows[sr][0];
+        for (var b = 0; b < blocks.length; b++) blocks[b].where = anchorMid[blocks[b].siblingId];
+      } else {
+        blocks = [{ siblingId: null, recs: recs, where: 'at bottom — [' + label + '] section not found' }];
+      }
 
-      for (var ri = 0; ri < recs.length; ri++) {
-        var rec = recs[ri];
-        var cells = buildRowCells(rec, colMap);
-        if (cells.length === 0) {
-          pushLog('  ! No data to push for ' + (rec.member_id || '?'), 'warn');
-          continue;
-        }
-        var mid = rec.member_id || '?';
-        try {
-          if (sectionRowId) {
-            var siblingRow = findInsertSibling(sheetRows, sectionRowId, mid, memberIdColId);
-            await addRowBelow(token, principleId, siblingRow, cells);
-            if (siblingRow === sectionRowId) {
-              pushLog('  + Added ' + mid + ' (top of ' + label + ') — IR #' + (rec.ir_number || '?') + ', ' + (rec.date || ''), 'success');
-            } else {
-              // Figure out which member_id we landed under for a nicer log line.
-              var sectionRowsNow = getSectionMemberRows(sheetRows, sectionRowId, memberIdColId);
-              var underMid = '?';
-              for (var sr = 0; sr < sectionRowsNow.length; sr++) {
-                if (sectionRowsNow[sr][1] === siblingRow) { underMid = sectionRowsNow[sr][0]; break; }
-              }
-              pushLog('  + Added ' + mid + ' (under ' + underMid + ') — IR #' + (rec.ir_number || '?') + ', ' + (rec.date || ''), 'success');
-            }
-            // Refresh so the next insert sees the updated sheet.
-            var refreshed = await fetchSheet(token, principleId);
-            sheetRows = refreshed.rows || [];
-          } else {
-            await addRowToBottom(token, principleId, cells);
-            pushLog('  + Added ' + mid + ' at bottom — [' + label + '] section not found', 'warn');
-          }
-          pushedMemberIds.push(mid);
-          pushedCount++;
-        } catch (e) {
-          pushLog('  ERROR pushing ' + mid + ' — ' + e.message, 'error');
-          failedCount++;
-        }
+      var groupPushedIds = [];
+      for (var bi = 0; bi < blocks.length; bi++) {
+        var res = await addBlock(token, principleId, blocks[bi], colMap, progress);
+        pushedCount += res.pushedIds.length;
+        failedCount += res.failed;
+        groupPushedIds = groupPushedIds.concat(res.pushedIds);
+      }
+      if (shadow && groupPushedIds.length > 0) {
+        await colorShadowIds(token, shadowId, shadow, groupPushedIds);
       }
     }
 
     pushLog('', 'info');
     pushLog('Pushed ' + pushedCount + ' / ' + toPush.length + ' record(s) to Principle sheet.',
       failedCount > 0 ? 'warn' : 'success');
-
-    // Shadow List coloring step.
-    if (pushedMemberIds.length > 0) {
-      await updateShadowList(token, shadowId, pushedMemberIds);
-    } else {
-      pushLog('Shadow List update skipped (no rows pushed).', 'info');
+    if (failedCount > 0) {
+      pushLog('Click Push again to retry only the ' + failedCount + ' record(s) that failed.', 'warn');
     }
 
-    // Refresh local dedup state so another push wouldn't re-add the same records.
+    if (shadow) shadowSummary(shadow);
+    else pushLog('Shadow List was not updated (it failed to load).', 'warn');
+
+    // Refresh local dedup state against the updated sheet.
     pushLog('', 'info');
     pushLog('Refreshing dedup cache...', 'info');
     var refresh2 = await fetchSheet(token, principleId);
@@ -1203,81 +1218,184 @@ async function pushApproved() {
     }
   } catch (e) {
     pushLog('Push aborted: ' + e.message, 'error');
+    pushLog('Records already added are marked done — click Push again to continue with the rest.', 'warn');
   } finally {
+    pushInProgress = false;
+    window.removeEventListener('beforeunload', warnPushInProgress);
     btn.innerHTML = 'Push Approved to Smartsheet';
     updatePushBtn();
   }
 }
 
-// Walk every row of the Shadow List looking for cells whose normalized
-// value matches a pushed Member ID. When found, color green if not
-// already green. Logs matched / already-green / not-found counts.
-async function updateShadowList(token, shadowId, memberIds) {
-  pushLog('', 'info');
-  pushLog('Updating Shadow List...', 'info');
+// Add one block of records below block.siblingId (or at the bottom when
+// null), ADD_CHUNK rows per request. If Smartsheet rejects a request
+// (4xx — nothing was added), retry its rows one at a time so a single
+// bad row doesn't sink the rest. Returns { pushedIds, failed }.
+async function addBlock(token, sheetId, block, colMap, progress) {
+  var items = [];
+  for (var i = 0; i < block.recs.length; i++) {
+    var cells = buildRowCells(block.recs[i], colMap);
+    if (cells.length === 0) {
+      pushLog('  ! No data to push for ' + (block.recs[i].member_id || '?'), 'warn');
+      progress.done++;
+      continue;
+    }
+    items.push({ rec: block.recs[i], cells: cells });
+  }
+  var pushedIds = [];
+  var failed = 0;
+  var siblingId = block.siblingId;
+
+  function succeeded(item, newRowId) {
+    item.rec._pushed = true;
+    var mid = item.rec.member_id || '?';
+    pushedIds.push(mid);
+    pushLog('  + Added ' + mid + ' (' + block.where + ') — IR #' + (item.rec.ir_number || '?') + ', ' + (item.rec.date || ''), 'success');
+    // Next rows go below the one just added, keeping the block in order.
+    if (siblingId && newRowId) siblingId = newRowId;
+  }
+
+  for (var s = 0; s < items.length; s += ADD_CHUNK) {
+    var chunk = items.slice(s, s + ADD_CHUNK);
+    try {
+      var ids = await addRows(token, sheetId, siblingId, chunk.map(function(c) { return c.cells; }));
+      for (var c = 0; c < chunk.length; c++) succeeded(chunk[c], ids[ids.length - 1]);
+    } catch (e) {
+      if (e.httpStatus && e.httpStatus < 500) {
+        if (chunk.length > 1) pushLog('  ! Batch of ' + chunk.length + ' rejected (' + e.message + ') — retrying one at a time', 'warn');
+        for (var c2 = 0; c2 < chunk.length; c2++) {
+          try {
+            var oneId = await addRows(token, sheetId, siblingId, [chunk[c2].cells]);
+            succeeded(chunk[c2], oneId[0]);
+          } catch (e2) {
+            pushLog('  ERROR pushing ' + (chunk[c2].rec.member_id || '?') + ' — ' + e2.message, 'error');
+            failed++;
+          }
+        }
+      } else {
+        // Network error / 5xx: Smartsheet may or may not have added these,
+        // so don't retry automatically (that could create duplicates).
+        var mids = chunk.map(function(c3) { return c3.rec.member_id || '?'; }).join(', ');
+        pushLog('  ERROR — ' + e.message + '. These ' + chunk.length + ' record(s) MAY have been added; check the sheet before pushing again: ' + mids, 'error');
+        failed += chunk.length;
+      }
+    }
+    progress.done += chunk.length;
+    progress.btn.innerHTML = '<span class="spinner"></span> Pushing ' + progress.done + ' / ' + progress.total + '...';
+  }
+  return { pushedIds: pushedIds, failed: failed };
+}
+
+// Load the Shadow List once per push and index its cells by normalized
+// Member ID (first match in row/column order wins). Returns null if it
+// can't be loaded — the push continues without Shadow List updates.
+async function loadShadowState(token, shadowId) {
+  pushLog('Loading Shadow List...', 'info');
   var sheet;
   try {
     sheet = await fetchSheet(token, shadowId);
   } catch (e) {
     pushLog('  ERROR loading Shadow List: ' + e.message, 'error');
-    return;
+    return null;
   }
+  var index = {};
   var rows = sheet.rows || [];
+  for (var ri = 0; ri < rows.length; ri++) {
+    var cells = rows[ri].cells || [];
+    for (var ci = 0; ci < cells.length; ci++) {
+      var cellVal = String(cells[ci].value || cells[ci].displayValue || '').trim();
+      if (!cellVal) continue;
+      var key = normalizeForShadow(cellVal);
+      if (key in index) continue;
+      var parts = (cells[ci].format || '').split(',');
+      index[key] = {
+        rowId: rows[ri].id,
+        columnId: cells[ci].columnId,
+        value: cellVal,
+        green: parts.length > 9 && parts[9] === String(SMARTSHEET_GREEN),
+      };
+    }
+  }
+  return { index: index, handled: {}, colored: 0, alreadyGreen: 0, notFound: [] };
+}
 
-  // Deduplicate + sort for deterministic log order.
-  var uniq = {};
-  for (var i = 0; i < memberIds.length; i++) uniq[memberIds[i]] = true;
-  var ids = Object.keys(uniq).sort();
+// Color the Shadow List cells for the given pushed Member IDs green,
+// batching the cell updates into UPDATE_CHUNK rows per request.
+async function colorShadowIds(token, shadowId, shadow, memberIds) {
+  var ids = [];
+  for (var i = 0; i < memberIds.length; i++) {
+    if (!shadow.handled[memberIds[i]]) { shadow.handled[memberIds[i]] = true; ids.push(memberIds[i]); }
+  }
+  ids.sort();
+  pushLog('  Updating Shadow List for ' + ids.length + ' Member ID(s)...', 'info');
 
-  var matched = 0, alreadyGreen = 0, notFound = 0;
-  var notFoundList = [];
+  // Smartsheet takes one entry per row per request, so group by row.
+  var byRow = {};
+  var rowOrder = [];
+  for (var k = 0; k < ids.length; k++) {
+    var mid = ids[k];
+    var hit = shadow.index[normalizeForShadow(mid)];
+    if (!hit) {
+      pushLog('  ? Not found in Shadow List: ' + mid, 'warn');
+      shadow.notFound.push(mid);
+      continue;
+    }
+    if (hit.green) {
+      pushLog('  ~ Already green: ' + mid, 'info');
+      shadow.alreadyGreen++;
+      continue;
+    }
+    if (!byRow[hit.rowId]) { byRow[hit.rowId] = { hits: [], mids: [] }; rowOrder.push(hit.rowId); }
+    var entry = byRow[hit.rowId];
+    if (entry.hits.indexOf(hit) === -1) entry.hits.push(hit);
+    entry.mids.push(mid);
+  }
 
-  for (var idI = 0; idI < ids.length; idI++) {
-    var mid = ids[idI];
-    var midNorm = normalizeForShadow(mid);
-    var found = false;
-    for (var ri = 0; ri < rows.length && !found; ri++) {
-      var cells = rows[ri].cells || [];
-      for (var ci = 0; ci < cells.length; ci++) {
-        var cell = cells[ci];
-        var cellVal = String(cell.value || cell.displayValue || '').trim();
-        if (!cellVal) continue;
-        if (normalizeForShadow(cellVal) === midNorm) {
-          found = true;
-          var fmt = cell.format || '';
-          var parts = fmt.split(',');
-          var isGreen = parts.length > 9 && parts[9] === String(SMARTSHEET_GREEN);
-          if (isGreen) {
-            pushLog('  ~ Already green: ' + mid, 'info');
-            alreadyGreen++;
-          } else {
-            try {
-              await updateCellColor(token, shadowId, rows[ri].id, cell.columnId, cellVal, SMARTSHEET_GREEN);
-              pushLog('  + Colored green: ' + mid, 'success');
-              matched++;
-            } catch (e) {
-              pushLog('  ERROR coloring ' + mid + ': ' + e.message, 'error');
-            }
-          }
-          break;
+  function toUpdate(rowId) {
+    return {
+      id: Number(rowId),
+      cells: byRow[rowId].hits.map(function(h) {
+        return { columnId: h.columnId, value: h.value, format: ',,,,,,,,,' + SMARTSHEET_GREEN + ',,,,,,' };
+      }),
+    };
+  }
+  function markDone(rowId) {
+    var e = byRow[rowId];
+    for (var h = 0; h < e.hits.length; h++) e.hits[h].green = true;
+    for (var m = 0; m < e.mids.length; m++) {
+      pushLog('  + Colored green: ' + e.mids[m], 'success');
+      shadow.colored++;
+    }
+  }
+
+  for (var s = 0; s < rowOrder.length; s += UPDATE_CHUNK) {
+    var chunk = rowOrder.slice(s, s + UPDATE_CHUNK);
+    try {
+      await updateRows(token, shadowId, chunk.map(toUpdate));
+      chunk.forEach(markDone);
+    } catch (e) {
+      // Retry row by row so one bad row doesn't block the others.
+      for (var r = 0; r < chunk.length; r++) {
+        try {
+          await updateRows(token, shadowId, [toUpdate(chunk[r])]);
+          markDone(chunk[r]);
+        } catch (e2) {
+          pushLog('  ERROR coloring ' + byRow[chunk[r]].mids.join(', ') + ': ' + e2.message, 'error');
         }
       }
     }
-    if (!found) {
-      pushLog('  ? Not found in Shadow List: ' + mid, 'warn');
-      notFound++;
-      notFoundList.push(mid);
-    }
   }
+}
 
+function shadowSummary(shadow) {
+  var notFound = shadow.notFound.slice().sort();
   pushLog('', 'info');
-  pushLog('Shadow List summary: ' + matched + ' colored, ' + alreadyGreen + ' already green, ' + notFound + ' not found',
-    notFound > 0 ? 'warn' : 'success');
-  // notFoundList is already unique (ids were deduped above).
-  lastNotFoundIds = notFoundList.slice();
-  document.getElementById('notFoundCsvBtn').classList.toggle('hidden', notFoundList.length === 0);
-  if (notFoundList.length > 0) {
-    pushLog('Not found: ' + notFoundList.join(', '), 'warn');
+  pushLog('Shadow List summary: ' + shadow.colored + ' colored, ' + shadow.alreadyGreen + ' already green, ' + notFound.length + ' not found',
+    notFound.length > 0 ? 'warn' : 'success');
+  lastNotFoundIds = notFound;
+  document.getElementById('notFoundCsvBtn').classList.toggle('hidden', notFound.length === 0);
+  if (notFound.length > 0) {
+    pushLog('Not found: ' + notFound.join(', '), 'warn');
     pushLog('Use "Download Not Found (CSV)" above to export this list.', 'info');
   }
 }
